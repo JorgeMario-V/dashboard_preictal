@@ -1,25 +1,198 @@
-# Documentación del Firmware ESP32 – Tabla Completa
+```cpp
+#include <WiFi.h>
+#include <WebSocketsServer.h>
+#include <Wire.h>
+#include <MPU6050.h>
+#include <ArduinoJson.h>
 
-A continuación se presenta toda la documentación del código en una sola tabla.  
-Las columnas incluyen: sección del sistema, descripción y fragmento de código correspondiente.
+// ---------------------------------------------------------------------------
+// OBJETOS PRINCIPALES
+// ---------------------------------------------------------------------------
+MPU6050 mpu;                     // Controlador del sensor MPU6050
+WebSocketsServer webSocket(81);  // Servidor WebSocket en el puerto 81
 
----
+// ---------------------------------------------------------------------------
+// CONFIGURACIÓN WIFI
+// ---------------------------------------------------------------------------
+const char* ssid = "EXT";        // Red WiFi
+const char* password = "juan3218";
 
-| Sección | Descripción | Código |
-|--------|-------------|--------|
-| **Bibliotecas** | Bibliotecas necesarias para conexión WiFi, WebSocket, comunicación I2C, uso del sensor y JSON. | ```cpp\n#include <WiFi.h>\n#include <WebSocketsServer.h>\n#include <Wire.h>\n#include <MPU6050.h>\n#include <ArduinoJson.h>\n``` |
-| **Objetos principales** | Inicialización del sensor MPU6050 y del servidor WebSocket en el puerto 81. | ```cpp\nMPU6050 mpu;\nWebSocketsServer webSocket(81);\n``` |
-| **Configuración WiFi** | SSID y contraseña de la red a la que se conectará el ESP32. | ```cpp\nconst char* ssid = "EXT";\nconst char* password = "juan3218";\n``` |
-| **Parámetros del sistema** | Definición de umbrales, pines, tiempos y límites del algoritmo preictal. | ```cpp\nconst int LED_PIN = 2;\nconst float UMBRAL_PREICTAL = 2.5;\nconst int DURACION_VENTANA = 5000;\nconst int FRECUENCIA_MUESTREO = 50;\nconst int LIMITE_EVENTOS = 15;\nconst unsigned long REINTENTO_WIFI_MS = 10000;\n``` |
-| **Variables temporales** | Controlan intervalos de reconexión WiFi y envío de datos JSON. | ```cpp\nunsigned long ultimoIntentoWiFi = 0;\nunsigned long ultimoEnvio = 0;\n``` |
-| **Inicialización del MPU6050** | Escanea dispositivos I2C, inicializa el sensor y verifica conexión. | ```cpp\nbool inicializarMPU() {\n  Serial.println(" Escaneando bus I2C...");\n  byte count = 0;\n  for (byte i = 1; i < 127; i++) {\n    Wire.beginTransmission(i);\n    if (Wire.endTransmission() == 0) {\n      Serial.printf(" Dispositivo I2C detectado en 0x%02X\\n", i);\n      count++;\n    }\n  }\n  Serial.printf(" Total dispositivos encontrados: %d\\n", count);\n  Serial.println(" Inicializando MPU6050...");\n  mpu.initialize();\n  delay(200);\n  return mpu.testConnection();\n}\n``` |
-| **Eventos WebSocket** | Detecta conexiones de nuevos clientes y muestra su IP. | ```cpp\nvoid onWebSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {\n  if (type == WStype_CONNECTED) {\n    IPAddress ip = webSocket.remoteIP(num);\n    Serial.printf(" Cliente conectado: %d.%d.%d.%d\\n", ip[0], ip[1], ip[2], ip[3]);\n  }\n}\n``` |
-| **Setup del dispositivo** | Inicializa serial, LED, I2C, WiFi y servidor WebSocket. | ```cpp\nvoid setup() {\n  Serial.begin(115200);\n  delay(1000);\n  pinMode(LED_PIN, OUTPUT);\n  Wire.begin(21, 22);\n  delay(500);\n  inicializarMPU();\n  WiFi.begin(ssid, password);\n  while (WiFi.status() != WL_CONNECTED) {\n    delay(500);\n    Serial.print(".");\n  }\n  webSocket.begin();\n  webSocket.onEvent(onWebSocketEvent);\n}\n``` |
-| **Verificación WiFi** | Reconexión automática si se pierde la conexión. | ```cpp\nvoid verificarWiFi() {\n  if (WiFi.status() != WL_CONNECTED && millis() - ultimoIntentoWiFi > REINTENTO_WIFI_MS) {\n    WiFi.disconnect();\n    WiFi.begin(ssid, password);\n    ultimoIntentoWiFi = millis();\n  }\n}\n``` |
-| **Variables del loop** | Variables usadas en la ventana de muestreo de 5 segundos. | ```cpp\nint16_t ax, ay, az;\nint eventos_irregulares = 0;\nunsigned long inicio = millis();\n``` |
-| **Bucle de muestreo** | Lee aceleraciones, calcula magnitud, cuenta picos y envía datos. | ```cpp\nwhile (millis() - inicio < DURACION_VENTANA) {\n  mpu.getAcceleration(&ax, &ay, &az);\n  float ax_g = ax / 16384.0;\n  float ay_g = ay / 16384.0;\n  float az_g = az / 16384.0;\n  float a_total = sqrt(ax_g * ax_g + ay_g * ay_g + az_g * az_g);\n  if (a_total > UMBRAL_PREICTAL) eventos_irregulares++;\n  if (millis() - ultimoEnvio > 200) {\n    StaticJsonDocument<200> doc;\n    doc["type"] = "sample";\n    doc["ax"] = ax_g;\n    doc["ay"] = ay_g;\n    doc["az"] = az_g;\n    doc["a_total"] = a_total;\n    String payload;\n    serializeJson(doc, payload);\n    webSocket.broadcastTXT(payload);\n    ultimoEnvio = millis();\n  }\n  delay(1000 / FRECUENCIA_MUESTREO);\n}\n``` |
-| **Evaluación de ventana** | Determina si hay posible estado preictal o actividad normal. | ```cpp\nif (eventos_irregulares > LIMITE_EVENTOS) {\n  digitalWrite(LED_PIN, HIGH);\n  StaticJsonDocument<200> alert;\n  alert["type"] = "alert";\n  alert["reason"] = "preictal_detected";\n  alert["count"] = eventos_irregulares;\n  String alertMsg;\n  serializeJson(alert, alertMsg);\n  webSocket.broadcastTXT(alertMsg);\n  delay(3000);\n  digitalWrite(LED_PIN, LOW);\n} else {\n  StaticJsonDocument<100> normal;\n  normal["type"] = "status";\n  normal["status"] = "ok";\n  String msg;\n  serializeJson(normal, msg);\n  webSocket.broadcastTXT(msg);\n}\n``` |
-| **Intervalo antes de la siguiente ventana** | Pausa de un segundo antes del siguiente ciclo. | ```cpp\ndelay(1000);\n``` |
+// ---------------------------------------------------------------------------
+// PARÁMETROS DEL SISTEMA
+// ---------------------------------------------------------------------------
+const int LED_PIN = 2;                  // LED indicador de alerta
+const float UMBRAL_PREICTAL = 2.5;      // Aceleración mínima considerada irregular (en g)
+const int DURACION_VENTANA = 5000;      // Duración de la ventana de análisis (ms)
+const int FRECUENCIA_MUESTREO = 50;     // Frecuencia del MPU6050 (Hz)
+const int LIMITE_EVENTOS = 15;          // Número mínimo de picos para alerta preictal
+const unsigned long REINTENTO_WIFI_MS = 10000;  // Reintentos WiFi
 
----
+// ---------------------------------------------------------------------------
+// VARIABLES DE TIEMPO
+// ---------------------------------------------------------------------------
+unsigned long ultimoIntentoWiFi = 0;    // Control de reconexión WiFi
+unsigned long ultimoEnvio = 0;          // Control de envío JSON
 
+// ---------------------------------------------------------------------------
+// INICIALIZACIÓN DEL SENSOR MPU6050
+// Escanea dispositivos I2C, inicializa el sensor y verifica conexión.
+// ---------------------------------------------------------------------------
+bool inicializarMPU() {
+  Serial.println(" Escaneando bus I2C...");
+  byte count = 0;
+
+  for (byte i = 1; i < 127; i++) {
+    Wire.beginTransmission(i);
+    if (Wire.endTransmission() == 0) {
+      Serial.printf(" Dispositivo I2C detectado en 0x%02X\n", i);
+      count++;
+    }
+  }
+
+  Serial.printf(" Total dispositivos encontrados: %d\n", count);
+  Serial.println(" Inicializando MPU6050...");
+  
+  mpu.initialize();
+  delay(200);
+
+  if (mpu.testConnection()) {
+    Serial.println(" MPU6050 conectado correctamente.\n");
+    return true;
+  } else {
+    Serial.println(" No se detecta MPU6050. Verifique conexiones SDA/SCL/VCC/GND.\n");
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// MANEJO DE EVENTOS DEL SERVIDOR WEBSOCKET
+// Registra cuando un cliente se conecta.
+// ---------------------------------------------------------------------------
+void onWebSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
+  if (type == WStype_CONNECTED) {
+    IPAddress ip = webSocket.remoteIP(num);
+    Serial.printf(" Cliente conectado: %d.%d.%d.%d\n", ip[0], ip[1], ip[2], ip[3]);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// CONFIGURACIÓN INICIAL DEL SISTEMA
+// ---------------------------------------------------------------------------
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+
+  pinMode(LED_PIN, OUTPUT);
+
+  Wire.begin(21, 22); // Pines SDA y SCL
+  delay(500);
+
+  inicializarMPU();
+
+  // Conexión a WiFi
+  Serial.printf("Conectando a WiFi (%s)...\n", ssid);
+  WiFi.begin(ssid, password);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.printf("\n WiFi conectado. IP: %s\n", WiFi.localIP().toString().c_str());
+
+  // Inicio de WebSocket
+  webSocket.begin();
+  webSocket.onEvent(onWebSocketEvent);
+  Serial.println(" Servidor WebSocket iniciado en puerto 81\n");
+}
+
+// ---------------------------------------------------------------------------
+// VERIFICACIÓN Y RECONEXIÓN WIFI
+// ---------------------------------------------------------------------------
+void verificarWiFi() {
+  if (WiFi.status() != WL_CONNECTED && millis() - ultimoIntentoWiFi > REINTENTO_WIFI_MS) {
+    Serial.println(" WiFi desconectado. Reintentando...");
+    WiFi.disconnect();
+    WiFi.begin(ssid, password);
+    ultimoIntentoWiFi = millis();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// BUCLE PRINCIPAL
+// Realiza el muestreo, envía datos y genera alertas.
+// ---------------------------------------------------------------------------
+void loop() {
+  webSocket.loop();
+  verificarWiFi();
+
+  int16_t ax, ay, az;
+  int eventos_irregulares = 0;
+  unsigned long inicio = millis();
+
+  Serial.println(" Nueva ventana de muestreo...");
+
+  while (millis() - inicio < DURACION_VENTANA) {
+    mpu.getAcceleration(&ax, &ay, &az);
+
+    float ax_g = ax / 16384.0;
+    float ay_g = ay / 16384.0;
+    float az_g = az / 16384.0;
+
+    float a_total = sqrt(ax_g * ax_g + ay_g * ay_g + az_g * az_g);
+
+    if (a_total > UMBRAL_PREICTAL) eventos_irregulares++;
+
+    // Envío de datos al dashboard cada 200 ms
+    if (millis() - ultimoEnvio > 200) {
+      StaticJsonDocument<200> doc;
+      doc["type"] = "sample";
+      doc["ax"] = ax_g;
+      doc["ay"] = ay_g;
+      doc["az"] = az_g;
+      doc["a_total"] = a_total;
+
+      String payload;
+      serializeJson(doc, payload);
+      webSocket.broadcastTXT(payload);
+
+      ultimoEnvio = millis();
+    }
+
+    delay(1000 / FRECUENCIA_MUESTREO);
+  }
+
+  // -------------------------------------------------------------------------
+  // EVALUACIÓN DE LA VENTANA
+  // Si supera el límite de picos, se detecta posible estado preictal.
+  // -------------------------------------------------------------------------
+  if (eventos_irregulares > LIMITE_EVENTOS) {
+    Serial.println(" Posible estado preictal detectado.");
+    digitalWrite(LED_PIN, HIGH);
+
+    StaticJsonDocument<200> alert;
+    alert["type"] = "alert";
+    alert["reason"] = "preictal_detected";
+    alert["count"] = eventos_irregulares;
+
+    String alertMsg;
+    serializeJson(alert, alertMsg);
+    webSocket.broadcastTXT(alertMsg);
+
+    delay(3000);
+    digitalWrite(LED_PIN, LOW);
+
+  } else {
+    Serial.println(" Actividad normal.");
+    
+    StaticJsonDocument<100> normal;
+    normal["type"] = "status";
+    normal["status"] = "ok";
+
+    String msg;
+    serializeJson(normal, msg);
+    webSocket.broadcastTXT(msg);
+  }
+
+  delay(1000);
+}
