@@ -23,5 +23,3 @@ Las columnas incluyen: sección del sistema, descripción y fragmento de código
 
 ---
 
-# Fin del documento
-
