@@ -71,7 +71,7 @@ El ESP32 actúa como servidor WebSocket en el puerto 81.
   "count": 18
 }
 ```
-3. Capa de Visualización y Análisis
+##3. Capa de Visualización y Análisis
 
 (Aplicación Flutter — Dashboard Preictal)
 
